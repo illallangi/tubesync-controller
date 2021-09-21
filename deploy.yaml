@@ -66,13 +66,60 @@ rules:
 - apiGroups:
   - controllers.illallangi.enterprises
   resources:
-  - dnsrpzrecord
+  - dnsrpzrecords
   verbs:
   - create
   - get
   - list
   - watch
   - patch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - persistentvolumeclaims
+  - secrets
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+  - patch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+  - patch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  - rolebindings
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+  - patch
+  - bind
+  - escalate
 - apiGroups:
   - ""
   resources:
