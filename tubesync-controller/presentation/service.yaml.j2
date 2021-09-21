@@ -1,0 +1,10 @@
+spec:
+  ports:
+  - name: web
+    port: 80
+    targetPort: web
+  - name: web-secure
+    port: 443
+    targetPort: web-secure
+  selector: {{ selector }}
+  type: LoadBalancer

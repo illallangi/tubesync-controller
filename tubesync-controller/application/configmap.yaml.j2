@@ -1,0 +1,233 @@
+data:
+  uid: "1061"
+  gid: "1061"
+  tz: Australia/Melbourne  
+  uriPath: '/{{ spec['uriPath'] }}'
+  CaddyFile: |-
+    {
+      admin off
+      http_port 65080
+      https_port 65443
+      debug
+    }
+    :65443 {
+      tls /etc/caddy/tls.crt /etc/caddy/tls.key
+      route /.well-known/teapot {
+        teapot
+      }
+      route /.well-known/health {
+        respond 200
+      }
+      route /* {
+        reverse_proxy http://localhost:4848
+      }
+    }
+    :5800 {
+      respond /.well-known/health 200
+    }
+  03-install-jq: |-
+    #!/usr/bin/with-contenv bash
+    apt-get -y update
+    apt-get -y install jq
+  03-install-pip: |-
+    #!/usr/bin/with-contenv bash
+    apt-get -y update
+    apt-get -y install python3-pip
+  04-export-database-connection: |-
+    #!/usr/bin/with-contenv bash
+    echo -n "mysql://${MYSQL_USER}:$(echo -n ${MYSQL_PASSWORD}|jq -sRr @uri)@${MYSQL_HOST}:3306/${MYSQL_DATABASE}" > /var/run/s6/container_environment/DATABASE_CONNECTION
+  05-update-youtubedl: |-
+    #!/usr/bin/with-contenv bash
+    python3 -m pip install --upgrade youtube-dl
+  local_settings.py: |-
+    import os
+    from pathlib import Path
+    from common.logger import log
+    from common.utils import parse_database_connection_string
+
+
+    BASE_DIR = Path(__file__).resolve().parent.parent
+    ROOT_DIR = Path('/')
+    CONFIG_BASE_DIR = ROOT_DIR / 'config'
+    DOWNLOADS_BASE_DIR = ROOT_DIR / 'downloads'
+
+
+    # This is not ever meant to be a public web interface so this isn't too critical
+    SECRET_KEY = str(os.getenv('DJANGO_SECRET_KEY', 'tubesync-django-secret'))
+
+
+    ALLOWED_HOSTS_STR = str(os.getenv('TUBESYNC_HOSTS', '127.0.0.1,localhost'))
+    ALLOWED_HOSTS = ALLOWED_HOSTS_STR.split(',')
+    DEBUG = True if os.getenv('TUBESYNC_DEBUG', False) else False
+    FORCE_SCRIPT_NAME = os.getenv('DJANGO_FORCE_SCRIPT_NAME', None)
+
+
+    TIME_ZONE = os.getenv('TZ', 'UTC')
+
+
+    database_dict = {}
+    database_connection_env = os.getenv('DATABASE_CONNECTION', '')
+    if database_connection_env:
+        database_dict = parse_database_connection_string(database_connection_env)
+
+
+    if database_dict:
+        log.info(f'Using database connection: {database_dict["ENGINE"]}://'
+                f'{database_dict["USER"]}:{database_dict["PASSWORD"]}@{database_dict["HOST"]}:'
+                f'{database_dict["PORT"]}/{database_dict["NAME"]}')
+        DATABASES = {
+            'default': database_dict,
+        }
+        DATABASE_CONNECTION_STR = (f'{database_dict["DRIVER"]} at "{database_dict["HOST"]}:'
+                                  f'{database_dict["PORT"]}" database '
+                                  f'"{database_dict["NAME"]}"')
+    else:
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.sqlite3',
+                'NAME': CONFIG_BASE_DIR / 'db.sqlite3',
+            }
+        }
+        DATABASE_CONNECTION_STR = f'sqlite at "{DATABASES["default"]["NAME"]}"'
+
+
+    DEFAULT_THREADS = 1
+    MAX_BACKGROUND_TASK_ASYNC_THREADS = 8
+    BACKGROUND_TASK_ASYNC_THREADS = int(os.getenv('TUBESYNC_WORKERS', DEFAULT_THREADS))
+    if BACKGROUND_TASK_ASYNC_THREADS > MAX_BACKGROUND_TASK_ASYNC_THREADS:
+        BACKGROUND_TASK_ASYNC_THREADS = MAX_BACKGROUND_TASK_ASYNC_THREADS
+
+
+    MEDIA_ROOT = CONFIG_BASE_DIR / 'media'
+    DOWNLOAD_ROOT = DOWNLOADS_BASE_DIR
+    YOUTUBE_DL_CACHEDIR = CONFIG_BASE_DIR / 'cache'
+
+
+    BASICAUTH_USERNAME = os.getenv('HTTP_USER', '').strip()
+    BASICAUTH_PASSWORD = os.getenv('HTTP_PASS', '').strip()
+    if BASICAUTH_USERNAME and BASICAUTH_PASSWORD:
+        BASICAUTH_DISABLE = False
+        BASICAUTH_USERS = {
+            BASICAUTH_USERNAME: BASICAUTH_PASSWORD,
+        }
+    else:
+        BASICAUTH_DISABLE = True
+        BASICAUTH_USERS = {}
+  utils.py: |-
+    from urllib.parse import urlunsplit, urlencode, urlparse, unquote
+    from .errors import DatabaseConnectionError
+
+
+    def parse_database_connection_string(database_connection_string):
+        '''
+            Parses a connection string in a URL style format, such as:
+                postgresql://tubesync:password@localhost:5432/tubesync
+                mysql://someuser:somepassword@localhost:3306/tubesync
+            into a Django-compatible settings.DATABASES dict format. 
+        '''
+        valid_drivers = ('postgresql', 'mysql')
+        default_ports = {
+            'postgresql': 5432,
+            'mysql': 3306,
+        }
+        django_backends = {
+            'postgresql': 'django.db.backends.postgresql',
+            'mysql': 'django.db.backends.mysql',
+        }
+        backend_options = {
+            'postgresql': {},
+            'mysql': {
+                'charset': 'utf8mb4',
+            }
+        }
+        try:
+            parts = urlparse(str(database_connection_string))
+        except Exception as e:
+            raise DatabaseConnectionError(f'Failed to parse "{database_connection_string}" '
+                                          f'as a database connection string: {e}') from e
+        driver = parts.scheme
+        user_pass_host_port = parts.netloc
+        database = parts.path
+        if driver not in valid_drivers:
+            raise DatabaseConnectionError(f'Database connection string '
+                                          f'"{database_connection_string}" specified an '
+                                          f'invalid driver, must be one of {valid_drivers}')
+        django_driver = django_backends.get(driver)
+        host_parts = user_pass_host_port.split('@')
+        if len(host_parts) != 2:
+            raise DatabaseConnectionError(f'Database connection string netloc must be in '
+                                          f'the format of user:pass@host')
+        user_pass, host_port = host_parts
+        user_pass_parts = user_pass.split(':')
+        if len(user_pass_parts) != 2:
+            raise DatabaseConnectionError(f'Database connection string netloc must be in '
+                                          f'the format of user:pass@host')
+        username, password = user_pass_parts
+        password = unquote(password)
+        host_port_parts = host_port.split(':')
+        if len(host_port_parts) == 1:
+            # No port number, assign a default port
+            hostname = host_port_parts[0]
+            port = default_ports.get(driver)
+        elif len(host_port_parts) == 2:
+            # Host name and port number
+            hostname, port = host_port_parts
+            try:
+                port = int(port)
+            except (ValueError, TypeError) as e:
+                raise DatabaseConnectionError(f'Database connection string contained an '
+                                              f'invalid port, ports must be integers: '
+                                              f'{e}') from e
+            if not 0 < port < 63336:
+                raise DatabaseConnectionError(f'Database connection string contained an '
+                                              f'invalid port, ports must be between 1 and '
+                                              f'65535, got {port}')
+        else:
+            # Malformed
+            raise DatabaseConnectionError(f'Database connection host must be a hostname or '
+                                          f'a hostname:port combination')
+        if database.startswith('/'):
+            database = database[1:]
+        if not database:
+            raise DatabaseConnectionError(f'Database connection string path must be a '
+                                          f'string in the format of /databasename')    
+        if '/' in database:
+            raise DatabaseConnectionError(f'Database connection string path can only '
+                                          f'contain a single string name, got: {database}')
+        return {
+            'DRIVER': driver,
+            'ENGINE': django_driver,
+            'NAME': database,
+            'USER': username,
+            'PASSWORD': password,
+            'HOST': hostname,
+            'PORT': port,
+            'CONN_MAX_AGE': 300,
+            'OPTIONS': backend_options.get(driver),
+        }
+
+
+    def get_client_ip(request):
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(',')[0]
+        else:
+            ip = request.META.get('REMOTE_ADDR')
+        return ip
+
+
+    def append_uri_params(uri, params):
+        uri = str(uri)
+        qs = urlencode(params)
+        return urlunsplit(('', '', uri, qs, ''))
+
+
+    def clean_filename(filename):
+        if not isinstance(filename, str):
+            raise ValueError(f'filename must be a str, got {type(filename)}')
+        to_scrub = '<>\/:*?"|%'
+        for char in to_scrub:
+            filename = filename.replace(char, '')
+        filename = ''.join([c for c in filename if ord(c) > 30])
+        return ' '.join(filename.split())
+

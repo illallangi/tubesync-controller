@@ -1,0 +1,9 @@
+apiVersion: controllers.illallangi.enterprises/v1
+kind: DNSRPZRecord
+spec:
+- name: {{ spec['domainName'] }}
+  selector: {{ selector }}
+  type: Selector
+- name: www.{{ spec['domainName'] }}
+  selector: {{ selector }}
+  type: Selector

@@ -1,0 +1,18 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+spec:
+  commonName: {{ spec["domainName"] }}
+  dnsNames:
+  - {{ spec["domainName"] }}
+{%- for o in tubesync_idx[namespace] %}
+  - {{ o["spec"]["hostName"] }}.{{ spec["domainName"] }}
+{%- endfor %}
+  - www.{{ spec["domainName"] }}
+  issuerRef:
+    kind: {{ spec["cert"]["issuerKind"] }}
+    name: {{ spec["cert"]["issuerName"] }}
+  keySize: 4096
+  secretName: {{ selector.values() | join('-') }}
+  subject: 
+    organizations:
+    - {{ spec["cert"]["organization"] }}

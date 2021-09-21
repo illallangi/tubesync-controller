@@ -1,0 +1,37 @@
+data:
+    CaddyFile: |-
+        {
+            admin off
+            http_port 65080
+            https_port 65443
+            debug
+        }
+        :65443 {
+            tls /etc/caddy/tls.crt /etc/caddy/tls.key
+            route /.well-known/teapot {
+                teapot
+            }
+            route /.well-known/health {
+                respond 200
+            }
+            
+{%- for o in tubesync_idx[namespace] %}
+            route {{ ["/", o["spec"]["uriPath"]] | path_join }}* {
+                redir https://{{ o["spec"]["hostName"] }}.{{ spec["domainName"] }}/
+            }
+{%- endfor %}
+{%- if (tubesync_idx[namespace] | length == 1) %}
+            route /* {
+                redir https://{{ spec["domainName"] }}/{{ (tubesync_idx[namespace] | first)["spec"]["uriPath"] }}
+            }
+{%- else %}
+            route /* {
+                file_server browse {
+                    root /var/www/html
+                }
+            }
+{%- endif %}
+        }
+        :5800 {
+            respond /.well-known/health 200
+        }

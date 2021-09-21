@@ -1,0 +1,49 @@
+metadata:
+  annotations:
+    configmap.reloader.stakater.com/reload: {{ presentation_configmap['metadata']['name'] }}
+    secret.reloader.stakater.com/reload: {{ tls_certificate['spec']['secretName'] }}
+spec:
+  selector:
+    matchLabels: {{ selector }}
+  template:
+    metadata:
+      labels: {{ selector }}
+    spec:
+      containers: 
+      - image: docker.io/illallangi/caddy:latest
+        imagePullPolicy: IfNotPresent
+        name: caddy
+        ports:
+        - containerPort: 65080
+          name: web
+        - containerPort: 65443
+          name: web-secure
+        volumeMounts:
+        - mountPath: /etc/caddy/Caddyfile
+          name: config
+          subPath: CaddyFile
+          readOnly: True
+        - mountPath: /etc/caddy/tls.crt
+          name: tls
+          subPath: tls.crt
+          readOnly: True
+        - mountPath: /etc/caddy/tls.key
+          name: tls
+          subPath: tls.key
+          readOnly: True
+{%- for o in tubesync_idx[namespace] %}
+        - mountPath: {{ ["/var/www/html", o["spec"]["uriPath"]] | path_join }}
+          name: scratch
+          readOnly: True
+{%- endfor %}
+      serviceAccount: {{ presentation_serviceaccount['metadata']['name'] }}
+      serviceAccountName: {{ presentation_serviceaccount['metadata']['name'] }}
+      volumes:
+      - name: config
+        configMap:
+          name: {{ presentation_configmap['metadata']['name'] }}
+      - name: tls
+        secret:
+          secretName: {{ tls_certificate['spec']['secretName'] }}
+      - name: scratch
+        emptyDir: {}

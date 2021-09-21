@@ -1,0 +1,7 @@
+spec: 
+  accessModes: 
+  - ReadWriteOnce
+  resources: 
+    requests: 
+      storage: {{ spec["persistence"]["storage"]}}
+  storageClassName: {{ spec["persistence"]["storageClassName"] }}

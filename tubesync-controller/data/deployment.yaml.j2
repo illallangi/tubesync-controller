@@ -1,0 +1,78 @@
+metadata:
+  annotations:
+    configmap.reloader.stakater.com/reload: {{ data_configmap['metadata']['name'] }}
+    secret.reloader.stakater.com/reload: {{ data_secret['metadata']['name'] }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{ selector }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels: {{ selector }}
+    spec:
+      containers:
+      - args:
+        - --character-set-server=utf8mb4
+        - --collation-server=utf8mb4_general_ci # utf8mb4_0900_ai_ci
+        env:
+        - name: MYSQL_DATABASE
+          valueFrom:
+            configMapKeyRef:
+              key: database
+              name: {{ data_configmap['metadata']['name'] }}
+        - name: MYSQL_USER
+          valueFrom:
+            configMapKeyRef:
+              key: user
+              name: {{ data_configmap['metadata']['name'] }}
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: {{ data_secret['metadata']['name'] }}
+        - name: MYSQL_RANDOM_ROOT_PASSWORD
+          value: 'yes'
+        image: docker.io/library/mariadb:10.6.0
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          exec:
+            command:
+            - bash
+            - -c
+            - |
+              /usr/bin/mysql --user=${MYSQL_USER} \
+                             --password=${MYSQL_PASSWORD} \
+                             --execute 'SHOW DATABASES;'
+          failureThreshold: 2
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: mariadb
+        ports:
+        - containerPort: 3306
+          name: db
+        startupProbe:
+          exec:
+            command:
+            - bash
+            - -c
+            - |
+              /usr/bin/mysql --user=${MYSQL_USER} \
+                             --password=${MYSQL_PASSWORD} \
+                             --execute 'SHOW DATABASES;'
+          failureThreshold: 30
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        volumeMounts:
+        - mountPath: /var/lib/mysql
+          name: persistence
+          subPath: var/lib/mysql
+      serviceAccount: {{ data_serviceaccount['metadata']['name'] }}
+      serviceAccountName: {{ data_serviceaccount['metadata']['name'] }}
+      volumes:
+      - name: persistence
+        persistentVolumeClaim:
+          claimName: {{ data_persistentvolumeclaim['metadata']['name'] }}

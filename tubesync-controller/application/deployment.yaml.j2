@@ -1,0 +1,196 @@
+metadata:
+  annotations:
+    configmap.reloader.stakater.com/reload: {{ application_configmap['metadata']['name'] }},{{ data_configmap['metadata']['name'] }}
+    secret.reloader.stakater.com/reload: {{ data_secret['metadata']['name'] }},{{ tls_certificate['spec']['secretName'] }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{ selector }}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels: {{ selector }}
+    spec:
+      containers:
+      - env:
+        - name: MYSQL_HOST
+          valueFrom:
+            configMapKeyRef:
+              key: host
+              name: {{ data_configmap['metadata']['name'] }}
+        - name: MYSQL_DATABASE
+          valueFrom:
+            configMapKeyRef:
+              key: database
+              name: {{ data_configmap['metadata']['name'] }}
+        - name: MYSQL_USER
+          valueFrom:
+            configMapKeyRef:
+              key: user
+              name: {{ data_configmap['metadata']['name'] }}
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: {{ data_secret['metadata']['name'] }}
+        - name: PUID
+          valueFrom:
+            configMapKeyRef:
+              key: uid
+              name: {{ application_configmap['metadata']['name'] }}
+        - name: PGID
+          valueFrom:
+            configMapKeyRef:
+              key: gid
+              name: {{ application_configmap['metadata']['name'] }}
+        - name: TZ
+          valueFrom:
+            configMapKeyRef:
+              key: tz
+              name: {{ application_configmap['metadata']['name'] }}
+        image: "{{ spec['tubesyncImage'] | default('ghcr.io/meeb/tubesync:latest') }}"
+        imagePullPolicy: IfNotPresent
+        name: tubesync
+        ports:
+        - containerPort: 4848
+          name: tubesync
+        volumeMounts:
+        - mountPath: /config
+          name: persistence
+          subPath: config
+        - mountPath: /downloads
+          name: {{ spec['data']['claimName'] }}
+          subPath: {{ spec['data']['subPath'] }}
+        - mountPath: /etc/cont-init.d/03-install-jq
+          name: projected
+          subPath: 03-install-jq
+        - mountPath: /etc/cont-init.d/03-install-pip
+          name: projected
+          subPath: 03-install-pip
+        - mountPath: /etc/cont-init.d/04-export-database-connection
+          name: projected
+          subPath: 04-export-database-connection
+        - mountPath: /etc/cont-init.d/05-update-youtubedl
+          name: projected
+          subPath: 05-update-youtubedl
+        - mountPath: /app/tubesync/local_settings.py
+          name: config
+          subPath: local_settings.py
+        - mountPath: /app/common/utils.py
+          name: config
+          subPath: utils.py
+      - image: docker.io/illallangi/caddy:latest
+        imagePullPolicy: IfNotPresent
+        name: caddy
+        ports:
+        - containerPort: 65080
+          name: web
+        - containerPort: 65443
+          name: web-secure
+        volumeMounts:
+        - mountPath: /etc/caddy/Caddyfile
+          name: config
+          subPath: CaddyFile
+          readOnly: True
+        - mountPath: /etc/caddy/tls.crt
+          name: tls
+          subPath: tls.crt
+          readOnly: True
+        - mountPath: /etc/caddy/tls.key
+          name: tls
+          subPath: tls.key
+          readOnly: True
+      - image: docker.io/illallangi/lsyncd:0.0.3
+        imagePullPolicy: IfNotPresent
+        name: lsyncd
+        volumeMounts:
+        - mountPath: /target
+          name: {{ spec['backup']['claimName'] }}
+          subPath: {{ spec['backup']['subPath'] }}
+        - mountPath: /source
+          name: persistence
+          subPath: config
+      initContainers:
+      - env:
+        - name: PERM_UID
+          valueFrom:
+            configMapKeyRef:
+              key: uid
+              name: {{ application_configmap['metadata']['name'] }}
+        - name: PERM_GID
+          valueFrom:
+            configMapKeyRef:
+              key: gid
+              name: {{ application_configmap['metadata']['name'] }}
+        name: init-backup-fixperms
+        image: docker.io/illallangi/toolbx:v0.32.0
+        command:
+        - fixperms.sh
+        - /mnt
+        volumeMounts:
+        - mountPath: /mnt
+          name: {{ spec['backup']['claimName'] }}
+          subPath: {{ spec['backup']['subPath'] }}
+      - env:
+        - name: PERM_UID
+          valueFrom:
+            configMapKeyRef:
+              key: uid
+              name: {{ application_configmap['metadata']['name'] }}
+        - name: PERM_GID
+          valueFrom:
+            configMapKeyRef:
+              key: gid
+              name: {{ application_configmap['metadata']['name'] }}
+        name: init-config-fixperms
+        image: docker.io/illallangi/toolbx:v0.32.0
+        command:
+        - fixperms.sh
+        - /mnt
+        volumeMounts:
+        - name: persistence
+          mountPath: /mnt
+          subPath: config
+      - args:
+        - pod
+        - -lapp.kubernetes.io/name=tubesync,app.kubernetes.io/component=data,app.kubernetes.io/instance={{ name }}
+        - --namespace {{ namespace }}
+        image: docker.io/groundnuty/k8s-wait-for:v1.4
+        imagePullPolicy: IfNotPresent
+        name: k8s-wait-for-data
+      serviceAccount: {{ application_serviceaccount['metadata']['name'] }}
+      serviceAccountName: {{ application_serviceaccount['metadata']['name'] }}
+      volumes:
+      - name: config
+        configMap:
+          name: {{ application_configmap['metadata']['name'] }}
+      - name: projected
+        projected:
+          sources:
+          - configMap:
+              name: {{ application_configmap['metadata']['name'] }}
+              items:
+              - key: 03-install-jq
+                path: 03-install-jq
+                mode: 0755
+              - key: 03-install-pip
+                path: 03-install-pip
+                mode: 0755
+              - key: 04-export-database-connection
+                path: 04-export-database-connection
+                mode: 0755
+              - key: 05-update-youtubedl
+                path: 05-update-youtubedl
+                mode: 0755
+      - name: tls
+        secret:
+          secretName: {{ tls_certificate['spec']['secretName'] }}
+      - name: persistence
+        persistentVolumeClaim:
+          claimName: {{ application_persistentvolumeclaim['metadata']['name'] }}
+{%- for o in [spec['data'], spec['backup']] | map(attribute='claimName') | unique %}
+      - name: {{ o }}
+        persistentVolumeClaim:
+          claimName: {{ o }}
+{%- endfor %}

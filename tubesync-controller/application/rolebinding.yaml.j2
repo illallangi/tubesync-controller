@@ -1,0 +1,7 @@
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ application_role["metadata"]["name"] }}
+subjects:
+- kind: ServiceAccount
+  name: {{ application_serviceaccount["metadata"]["name"] }}
